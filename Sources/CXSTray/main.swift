@@ -24,8 +24,8 @@ enum CommandRunner {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = arguments
         process.environment = ProcessInfo.processInfo.environment.merging([
-            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        ]) { current, _ in current }
+            "PATH": "/opt/homebrew/bin:/usr/local/bin:/Applications/Codex.app/Contents/Resources:/usr/bin:/bin:/usr/sbin:/sbin"
+        ]) { _, trayValue in trayValue }
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()

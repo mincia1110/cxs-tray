@@ -1,0 +1,372 @@
+import AppKit
+import Foundation
+
+struct AccountUsage {
+    let account: String
+    let email: String
+    let plan: String
+    let fiveHourLeft: String
+    let weekLeft: String
+    let reset: String
+    let source: String
+    var isDefault: Bool = false
+}
+
+struct CommandResult {
+    let output: String
+    let error: String
+    let status: Int32
+}
+
+enum CommandRunner {
+    static func run(_ arguments: [String], timeout: TimeInterval = 30) throws -> CommandResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = arguments
+        process.environment = ProcessInfo.processInfo.environment.merging([
+            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        ]) { current, _ in current }
+
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+
+        try process.run()
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        if process.isRunning {
+            process.terminate()
+            throw NSError(
+                domain: "CXSTray.CommandRunner",
+                code: 124,
+                userInfo: [NSLocalizedDescriptionKey: "\(arguments.joined(separator: " ")) timed out"]
+            )
+        }
+
+        let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return CommandResult(output: output, error: error, status: process.terminationStatus)
+    }
+}
+
+enum CXSParser {
+    static func parseUsage(_ text: String) -> [AccountUsage] {
+        let lines = text.split(whereSeparator: \.isNewline).map(String.init)
+        guard let header = lines.first(where: { $0.contains("Account") && $0.contains("Week left") }) else {
+            return []
+        }
+
+        let columns = ["Account", "Email", "Plan", "5h left", "Week left", "Reset", "Source"]
+        let starts = columns.compactMap { column -> (String, String.Index)? in
+            guard let range = header.range(of: column) else { return nil }
+            return (column, range.lowerBound)
+        }
+
+        guard starts.count == columns.count else { return [] }
+
+        return lines.drop(while: { $0 != header }).dropFirst().compactMap { line in
+            guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+            let values = columns.enumerated().map { index, column in
+                let start = starts[index].1
+                let end = index + 1 < starts.count ? starts[index + 1].1 : line.endIndex
+                return slice(line, fromHeaderIndex: start, toHeaderIndex: end, header: header)
+                    .trimmingCharacters(in: .whitespaces)
+            }
+
+            guard values.count == columns.count, !values[0].isEmpty else { return nil }
+
+            return AccountUsage(
+                account: values[0],
+                email: values[1],
+                plan: values[2],
+                fiveHourLeft: values[3],
+                weekLeft: values[4],
+                reset: values[5],
+                source: values[6]
+            )
+        }
+    }
+
+    static func parseDefaultAccount(_ text: String) -> String? {
+        let lines = text.split(whereSeparator: \.isNewline).map(String.init)
+        guard let header = lines.first(where: { $0.contains("Account") && $0.contains("Default") }) else {
+            return nil
+        }
+
+        guard
+            let accountStart = header.range(of: "Account")?.lowerBound,
+            let defaultStart = header.range(of: "Default")?.lowerBound,
+            let lastUsedStart = header.range(of: "Last Used")?.lowerBound
+        else {
+            return nil
+        }
+
+        return lines.drop(while: { $0 != header }).dropFirst().compactMap { line in
+            let account = slice(line, fromHeaderIndex: accountStart, toHeaderIndex: defaultStart, header: header)
+                .trimmingCharacters(in: .whitespaces)
+            let isDefault = slice(line, fromHeaderIndex: defaultStart, toHeaderIndex: lastUsedStart, header: header)
+                .trimmingCharacters(in: .whitespaces)
+            return isDefault == "yes" ? account : nil
+        }.first
+    }
+
+    private static func slice(_ line: String, fromHeaderIndex start: String.Index, toHeaderIndex end: String.Index, header: String) -> String {
+        let startOffset = header.distance(from: header.startIndex, to: start)
+        let endOffset = header.distance(from: header.startIndex, to: end)
+        let lineStart = line.index(line.startIndex, offsetBy: min(startOffset, line.count))
+        let lineEnd = line.index(line.startIndex, offsetBy: min(endOffset, line.count))
+        return String(line[lineStart..<lineEnd])
+    }
+}
+
+final class CXSService: @unchecked Sendable {
+    func loadAccounts() throws -> [AccountUsage] {
+        let usage = try CommandRunner.run(["cxs", "usage"], timeout: 45)
+        guard usage.status == 0 else {
+            throw commandError("cxs usage", usage)
+        }
+
+        let list = try CommandRunner.run(["cxs", "list"], timeout: 10)
+        let defaultAccount = list.status == 0 ? CXSParser.parseDefaultAccount(list.output) : nil
+
+        return CXSParser.parseUsage(usage.output).map { account in
+            var copy = account
+            copy.isDefault = account.account == defaultAccount
+            return copy
+        }
+    }
+
+    func sync(account: String) throws {
+        let result = try CommandRunner.run(["cxs", "sync", account], timeout: 30)
+        guard result.status == 0 else {
+            throw commandError("cxs sync \(account)", result)
+        }
+    }
+
+    private func commandError(_ command: String, _ result: CommandResult) -> NSError {
+        let detail = [result.error, result.output]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty }) ?? "exit \(result.status)"
+        return NSError(
+            domain: "CXSTray.CXSService",
+            code: Int(result.status),
+            userInfo: [NSLocalizedDescriptionKey: "\(command) failed: \(detail)"]
+        )
+    }
+}
+
+final class CodexAppController: @unchecked Sendable {
+    private let appName: String
+
+    init(appName: String) {
+        self.appName = appName
+    }
+
+    func quitGracefully(timeout: TimeInterval = 8) {
+        let runningApps = NSWorkspace.shared.runningApplications.filter {
+            $0.localizedName == appName || $0.bundleIdentifier?.localizedCaseInsensitiveContains("codex") == true
+        }
+
+        guard !runningApps.isEmpty else { return }
+
+        runningApps.forEach { $0.terminate() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while runningApps.contains(where: { !$0.isTerminated }) && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+        }
+    }
+
+    func relaunch() {
+        do {
+            _ = try CommandRunner.run(["open", "-a", appName], timeout: 10)
+        } catch {
+            NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/Applications/\(appName).app"), configuration: NSWorkspace.OpenConfiguration())
+        }
+    }
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let menu = NSMenu()
+    private let service = CXSService()
+    private var accounts: [AccountUsage] = []
+    private var refreshTimer: Timer?
+    private var isBusy = false
+
+    private var codexAppName: String {
+        ProcessInfo.processInfo.environment["CXS_TRAY_CODEX_APP_NAME"]
+            ?? UserDefaults(suiteName: "com.cxs.tray")?.string(forKey: "CodexAppName")
+            ?? UserDefaults.standard.string(forKey: "CodexAppName")
+            ?? "Codex"
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+        statusItem.button?.title = "CXS"
+        statusItem.button?.toolTip = "CXS account usage"
+        statusItem.menu = menu
+
+        rebuildMenu(status: "Loading...")
+        refresh()
+
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        refreshTimer?.invalidate()
+    }
+
+    private func refresh() {
+        guard !isBusy else { return }
+        isBusy = true
+        statusItem.button?.title = "CXS..."
+        rebuildMenu(status: "Refreshing...")
+
+        let service = service
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result { try service.loadAccounts() }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isBusy = false
+                switch result {
+                case .success(let accounts):
+                    self.accounts = accounts
+                    self.statusItem.button?.title = self.buttonTitle(for: accounts)
+                    self.rebuildMenu()
+                case .failure(let error):
+                    self.statusItem.button?.title = "CXS!"
+                    self.rebuildMenu(error: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func sync(_ account: AccountUsage) {
+        guard !isBusy else { return }
+        isBusy = true
+        statusItem.button?.title = "Sync..."
+        rebuildMenu(status: "Switching to \(account.account)...")
+
+        let appName = codexAppName
+        let service = service
+        let accountName = account.account
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result {
+                let codex = CodexAppController(appName: appName)
+                codex.quitGracefully()
+                try service.sync(account: accountName)
+                codex.relaunch()
+                return try service.loadAccounts()
+            }
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isBusy = false
+                switch result {
+                case .success(let accounts):
+                    self.accounts = accounts
+                    self.statusItem.button?.title = self.buttonTitle(for: accounts)
+                    self.rebuildMenu(status: "Synced \(accountName)")
+                case .failure(let error):
+                    self.statusItem.button?.title = "CXS!"
+                    self.rebuildMenu(error: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func rebuildMenu(status: String? = nil, error: String? = nil) {
+        menu.removeAllItems()
+
+        if let status {
+            let item = NSMenuItem(title: status, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+            menu.addItem(.separator())
+        }
+
+        if let error {
+            let item = NSMenuItem(title: error, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+            menu.addItem(.separator())
+        }
+
+        if accounts.isEmpty {
+            let empty = NSMenuItem(title: "No accounts loaded", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+        } else {
+            accounts.forEach { account in
+                let title = menuTitle(for: account)
+                let item = NSMenuItem(title: title, action: #selector(selectAccount(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = account.account
+                item.state = account.isDefault ? .on : .off
+                item.isEnabled = !isBusy
+                menu.addItem(item)
+            }
+        }
+
+        menu.addItem(.separator())
+
+        let refreshItem = NSMenuItem(title: "Refresh Usage", action: #selector(refreshAction(_:)), keyEquivalent: "r")
+        refreshItem.target = self
+        refreshItem.isEnabled = !isBusy
+        menu.addItem(refreshItem)
+
+        let appNameItem = NSMenuItem(title: "Codex app: \(codexAppName)", action: nil, keyEquivalent: "")
+        appNameItem.isEnabled = false
+        menu.addItem(appNameItem)
+
+        menu.addItem(.separator())
+
+        let quitItem = NSMenuItem(title: "Quit CXS Tray", action: #selector(quit(_:)), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+    }
+
+    private func buttonTitle(for accounts: [AccountUsage]) -> String {
+        if let current = accounts.first(where: \.isDefault) {
+            return "CXS \(current.fiveHourLeft)"
+        }
+        return "CXS"
+    }
+
+    private func menuTitle(for account: AccountUsage) -> String {
+        let defaultMarker = account.isDefault ? "current" : "sync"
+        return "\(account.account)  \(account.plan)  5h \(account.fiveHourLeft)  week \(account.weekLeft)  reset \(account.reset)  \(defaultMarker)"
+    }
+
+    @objc private func selectAccount(_ sender: NSMenuItem) {
+        guard
+            let accountName = sender.representedObject as? String,
+            let account = accounts.first(where: { $0.account == accountName })
+        else {
+            return
+        }
+
+        sync(account)
+    }
+
+    @objc private func refreshAction(_ sender: NSMenuItem) {
+        refresh()
+    }
+
+    @objc private func quit(_ sender: NSMenuItem) {
+        NSApp.terminate(nil)
+    }
+}
+
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.run()

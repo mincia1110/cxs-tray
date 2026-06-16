@@ -22,19 +22,38 @@ It shows the values from `cxs usage` in the menu bar menu. Selecting an account:
 swift run CXSTray
 ```
 
+## Install
+
+Install the menu bar app into `~/Applications` and register a user LaunchAgent:
+
+```sh
+bash scripts/install.sh
+```
+
+This creates:
+
+```text
+~/Applications/CXSTray.app
+~/Library/LaunchAgents/com.cxs.tray.plist
+```
+
+The LaunchAgent opens the installed app copy, not the workspace build output.
+
+To uninstall:
+
+```sh
+bash scripts/uninstall.sh
+```
+
 ## Build
 
 ```sh
 swift build -c release
 ```
 
-The compiled binary will be at:
+The compiled binary will be at `.build/release/CXSTray`.
 
-```sh
-.build/release/CXSTray
-```
-
-To create a double-clickable menu bar app bundle:
+To create a double-clickable menu bar app bundle without installing it:
 
 ```sh
 bash scripts/build-app.sh

@@ -2,6 +2,9 @@
 
 Small macOS menu bar app for switching the active Codex auth managed by `cxs`.
 
+This is an unofficial personal tool and is not affiliated with OpenAI. Use it
+only with Codex accounts you own or are authorized to use.
+
 It shows the values from `cxs usage` in the menu bar menu. Selecting an account:
 
 1. gracefully asks the running Codex app to quit,
@@ -13,7 +16,7 @@ It shows the values from `cxs usage` in the menu bar menu. Selecting an account:
 
 - macOS 13+
 - Swift 6 toolchain / Xcode command line tools
-- `cxs` available at `/opt/homebrew/bin/cxs`, `/usr/local/bin/cxs`, or somewhere on `PATH`
+- `cxs` available at `/opt/homebrew/bin/cxs`, `/usr/local/bin/cxs`, `/Applications/Codex.app/Contents/Resources`, or somewhere on `PATH`
 - Codex installed as a macOS app named `Codex`
 
 ## Run From Source
@@ -60,6 +63,9 @@ bash scripts/build-app.sh
 open .build/release/CXSTray.app
 ```
 
+`build-app.sh` creates a local app bundle with an ad-hoc signature. It is meant
+for local use, not as a notarized public binary distribution.
+
 ## Codex App Name
 
 If the installed app is not named `Codex`, launch with:
@@ -77,5 +83,20 @@ defaults write com.cxs.tray CodexAppName "Your App Name"
 ## Notes
 
 - The menu refreshes every 5 minutes.
-- The status item title shows the current default account's 5-hour remaining value.
+- The status item title shows the current default account name and 5-hour remaining value.
 - If Codex is not running when an account is selected, the app still syncs auth and launches Codex.
+- When syncing accounts, the app asks running apps named `Codex` or whose bundle identifier contains `codex` to quit before relaunching Codex.
+
+## Privacy and Security
+
+- CXS Tray does not intentionally store Codex credentials.
+- It invokes `cxs usage`, `cxs list`, and `cxs sync <account>`. Review the
+  `cxs` tool you use to understand how it reads or writes Codex auth state.
+- Account names, plan names, usage percentages, and reset times are visible in
+  the macOS menu bar/menu and can appear in screenshots or screen shares.
+- Command failures may be shown in the menu so you can diagnose local setup
+  problems.
+
+## License
+
+MIT

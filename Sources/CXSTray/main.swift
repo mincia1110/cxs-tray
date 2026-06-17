@@ -7,7 +7,8 @@ struct AccountUsage {
     let plan: String
     let fiveHourLeft: String
     let weekLeft: String
-    let reset: String
+    let fiveHourReset: String
+    let weekReset: String
     let source: String
     var isDefault: Bool = false
 }
@@ -61,7 +62,9 @@ enum CXSParser {
             return []
         }
 
-        let columns = ["Account", "Email", "Plan", "5h left", "Week left", "Reset", "Source"]
+        let modernColumns = ["Account", "Email", "Plan", "5h left", "Week left", "5h reset", "Week reset", "Source"]
+        let legacyColumns = ["Account", "Email", "Plan", "5h left", "Week left", "Reset", "Source"]
+        let columns = modernColumns.allSatisfy { header.contains($0) } ? modernColumns : legacyColumns
         let starts = columns.compactMap { column -> (String, String.Index)? in
             guard let range = header.range(of: column) else { return nil }
             return (column, range.lowerBound)
@@ -80,15 +83,29 @@ enum CXSParser {
 
             guard values.count == columns.count, !values[0].isEmpty else { return nil }
 
-            return AccountUsage(
-                account: values[0],
-                email: values[1],
-                plan: values[2],
-                fiveHourLeft: values[3],
-                weekLeft: values[4],
-                reset: values[5],
-                source: values[6]
-            )
+            if columns == modernColumns {
+                return AccountUsage(
+                    account: values[0],
+                    email: values[1],
+                    plan: values[2],
+                    fiveHourLeft: values[3],
+                    weekLeft: values[4],
+                    fiveHourReset: values[5],
+                    weekReset: values[6],
+                    source: values[7]
+                )
+            } else {
+                return AccountUsage(
+                    account: values[0],
+                    email: values[1],
+                    plan: values[2],
+                    fiveHourLeft: values[3],
+                    weekLeft: values[4],
+                    fiveHourReset: values[5],
+                    weekReset: values[5],
+                    source: values[6]
+                )
+            }
         }
     }
 
@@ -305,9 +322,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             empty.isEnabled = false
             menu.addItem(empty)
         } else {
+            let columnWidths = menuColumnWidths(for: accounts)
             accounts.forEach { account in
-                let title = menuTitle(for: account)
+                let title = menuTitle(for: account, widths: columnWidths)
                 let item = NSMenuItem(title: title, action: #selector(selectAccount(_:)), keyEquivalent: "")
+                item.attributedTitle = menuAttributedTitle(title)
                 item.target = self
                 item.representedObject = account.account
                 item.state = account.isDefault ? .on : .off
@@ -336,14 +355,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buttonTitle(for accounts: [AccountUsage]) -> String {
         if let current = accounts.first(where: \.isDefault) {
-            return "CXS \(current.fiveHourLeft)"
+            return "CXS \(current.account) \(current.fiveHourLeft)"
         }
         return "CXS"
     }
 
-    private func menuTitle(for account: AccountUsage) -> String {
+    private struct MenuColumnWidths {
+        let account: Int
+        let plan: Int
+        let fiveHourLeft: Int
+        let fiveHourReset: Int
+        let weekLeft: Int
+        let weekReset: Int
+    }
+
+    private func menuColumnWidths(for accounts: [AccountUsage]) -> MenuColumnWidths {
+        MenuColumnWidths(
+            account: maxWidth(accounts.map(\.account)),
+            plan: maxWidth(accounts.map(\.plan)),
+            fiveHourLeft: maxWidth(accounts.map(\.fiveHourLeft)),
+            fiveHourReset: maxWidth(accounts.map(\.fiveHourReset)),
+            weekLeft: maxWidth(accounts.map(\.weekLeft)),
+            weekReset: maxWidth(accounts.map(\.weekReset))
+        )
+    }
+
+    private func maxWidth(_ values: [String]) -> Int {
+        values.map(\.count).max() ?? 0
+    }
+
+    private func pad(_ value: String, to width: Int) -> String {
+        value.padding(toLength: width, withPad: " ", startingAt: 0)
+    }
+
+    private func menuTitle(for account: AccountUsage, widths: MenuColumnWidths) -> String {
         let defaultMarker = account.isDefault ? "current" : "sync"
-        return "\(account.account)  \(account.plan)  5h \(account.fiveHourLeft)  week \(account.weekLeft)  reset \(account.reset)  \(defaultMarker)"
+        return [
+            pad(account.account, to: widths.account),
+            pad(account.plan, to: widths.plan),
+            "5h \(pad(account.fiveHourLeft, to: widths.fiveHourLeft)) reset \(pad(account.fiveHourReset, to: widths.fiveHourReset))",
+            "week \(pad(account.weekLeft, to: widths.weekLeft)) reset \(pad(account.weekReset, to: widths.weekReset))",
+            defaultMarker
+        ].joined(separator: "  ")
+    }
+
+    private func menuAttributedTitle(_ title: String) -> NSAttributedString {
+        NSAttributedString(
+            string: title,
+            attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            ]
+        )
     }
 
     @objc private func selectAccount(_ sender: NSMenuItem) {

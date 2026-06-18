@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 
 struct AccountUsage {
@@ -17,6 +18,14 @@ struct CommandResult {
     let output: String
     let error: String
     let status: Int32
+}
+
+extension FileHandle {
+    func write(_ string: String) {
+        if let data = string.data(using: .utf8) {
+            write(data)
+        }
+    }
 }
 
 enum CommandRunner {
@@ -177,6 +186,15 @@ final class CXSService: @unchecked Sendable {
     }
 }
 
+enum AppSettings {
+    static var codexAppName: String {
+        ProcessInfo.processInfo.environment["CXS_TRAY_CODEX_APP_NAME"]
+            ?? UserDefaults(suiteName: "com.cxs.tray")?.string(forKey: "CodexAppName")
+            ?? UserDefaults.standard.string(forKey: "CodexAppName")
+            ?? "Codex"
+    }
+}
+
 final class CodexAppController: @unchecked Sendable {
     private let appName: String
 
@@ -207,6 +225,57 @@ final class CodexAppController: @unchecked Sendable {
     }
 }
 
+enum CLI {
+    static func runIfRequested(arguments: [String]) -> Int32? {
+        let args = Array(arguments.dropFirst())
+        guard !args.isEmpty else { return nil }
+
+        if args == ["--help"] || args == ["-h"] || args == ["help"] {
+            printUsage()
+            return 0
+        }
+
+        guard args.count == 2, ["switch", "sync"].contains(args[0]) else {
+            printUsage(to: FileHandle.standardError)
+            return 64
+        }
+
+        return switchAccount(args[1])
+    }
+
+    private static func switchAccount(_ account: String) -> Int32 {
+        let appName = AppSettings.codexAppName
+        let codex = CodexAppController(appName: appName)
+        let service = CXSService()
+
+        do {
+            print("Quitting \(appName)...")
+            codex.quitGracefully()
+            print("Syncing \(account)...")
+            try service.sync(account: account)
+            print("Launching \(appName)...")
+            codex.relaunch()
+            print("Synced \(account)")
+            return 0
+        } catch {
+            FileHandle.standardError.write("CXSTray: \(error.localizedDescription)\n")
+            return 1
+        }
+    }
+
+    private static func printUsage(to handle: FileHandle = .standardOutput) {
+        handle.write("""
+        Usage:
+          CXSTray                 Run the menu bar app
+          CXSTray switch <account> Quit Codex, run cxs sync <account>, relaunch Codex
+
+        Environment:
+          CXS_TRAY_CODEX_APP_NAME Override the Codex app name to relaunch
+
+        """)
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -217,10 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isBusy = false
 
     private var codexAppName: String {
-        ProcessInfo.processInfo.environment["CXS_TRAY_CODEX_APP_NAME"]
-            ?? UserDefaults(suiteName: "com.cxs.tray")?.string(forKey: "CodexAppName")
-            ?? UserDefaults.standard.string(forKey: "CodexAppName")
-            ?? "Codex"
+        AppSettings.codexAppName
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -426,6 +492,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func quit(_ sender: NSMenuItem) {
         NSApp.terminate(nil)
     }
+}
+
+if let status = CLI.runIfRequested(arguments: CommandLine.arguments) {
+    exit(status)
 }
 
 let app = NSApplication.shared

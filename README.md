@@ -25,6 +25,24 @@ It shows the values from `cxs usage` in the menu bar menu. Selecting an account:
 swift run CXSTray
 ```
 
+## CLI Account Switch
+
+The same executable can run the tray switch flow from a shell:
+
+```sh
+swift run CXSTray -- switch <account>
+```
+
+This quits the configured Codex app, runs `cxs sync <account>`, and relaunches
+Codex. It is useful over SSH when you want to switch the active account before
+using Codex remote.
+
+If you installed the app bundle, you can call the installed executable directly:
+
+```sh
+~/Applications/CXSTray.app/Contents/MacOS/CXSTray switch <account>
+```
+
 ## Install
 
 Install the menu bar app into `~/Applications` and register a user LaunchAgent:

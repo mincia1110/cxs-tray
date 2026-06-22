@@ -152,6 +152,8 @@ enum CXSParser {
 
 final class CXSService: @unchecked Sendable {
     func loadAccounts() throws -> [AccountUsage] {
+        try repairSessions()
+
         let usage = try CommandRunner.run(["cxs", "usage"], timeout: 45)
         guard usage.status == 0 else {
             throw commandError("cxs usage", usage)
@@ -168,9 +170,16 @@ final class CXSService: @unchecked Sendable {
     }
 
     func sync(account: String) throws {
-        let result = try CommandRunner.run(["cxs", "sync", account], timeout: 30)
+        let result = try CommandRunner.run(["cxs", "sync", account], timeout: 90)
         guard result.status == 0 else {
             throw commandError("cxs sync \(account)", result)
+        }
+    }
+
+    func repairSessions() throws {
+        let result = try CommandRunner.run(["cxs", "repair-sessions"], timeout: 90)
+        guard result.status == 0 else {
+            throw commandError("cxs repair-sessions", result)
         }
     }
 

@@ -174,6 +174,17 @@ final class CXSService: @unchecked Sendable {
         }
     }
 
+    func ensureOCXIfAvailable() throws -> Bool {
+        let available = try CommandRunner.run(["sh", "-c", "command -v ocx >/dev/null 2>&1"], timeout: 5)
+        guard available.status == 0 else { return false }
+
+        let result = try CommandRunner.run(["ocx", "ensure"], timeout: 30)
+        guard result.status == 0 else {
+            throw commandError("ocx ensure", result)
+        }
+        return true
+    }
+
     private func commandError(_ command: String, _ result: CommandResult) -> NSError {
         let detail = [result.error, result.output]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -253,6 +264,9 @@ enum CLI {
             codex.quitGracefully()
             print("Syncing \(account)...")
             try service.sync(account: account)
+            if try service.ensureOCXIfAvailable() {
+                print("Ensured ocx")
+            }
             print("Launching \(appName)...")
             codex.relaunch()
             print("Synced \(account)")
@@ -267,7 +281,7 @@ enum CLI {
         handle.write("""
         Usage:
           CXSTray                 Run the menu bar app
-          CXSTray switch <account> Quit Codex, run cxs sync <account>, relaunch Codex
+          CXSTray switch <account> Quit Codex, run cxs sync <account>, run ocx ensure if available, relaunch Codex
 
         Environment:
           CXS_TRAY_CODEX_APP_NAME Override the Codex app name to relaunch
@@ -346,6 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let codex = CodexAppController(appName: appName)
                 codex.quitGracefully()
                 try service.sync(account: accountName)
+                _ = try service.ensureOCXIfAvailable()
                 codex.relaunch()
                 return try service.loadAccounts()
             }

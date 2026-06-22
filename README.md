@@ -8,9 +8,11 @@ only with Codex accounts you own or are authorized to use.
 It shows the values from `cxs usage` in the menu bar menu. Selecting an account:
 
 1. gracefully asks the running Codex app to quit,
-2. runs `cxs sync <account>`,
-3. launches Codex again with `open -a Codex`,
-4. refreshes usage/default-account state.
+2. verifies Codex is no longer running,
+3. runs `cxs sync <account>`,
+4. runs `ocx ensure` if `ocx` is available,
+5. launches Codex again with `open -a Codex`,
+6. refreshes usage/default-account state.
 
 ## Requirements
 
@@ -33,7 +35,8 @@ The same executable can run the tray switch flow from a shell:
 swift run CXSTray -- switch <account>
 ```
 
-This quits the configured Codex app, runs `cxs sync <account>`, and relaunches
+This quits the configured Codex app, verifies it is no longer running, runs
+`cxs sync <account>`, runs `ocx ensure` when `ocx` is available, and relaunches
 Codex. It is useful over SSH when you want to switch the active account before
 using Codex remote.
 
@@ -103,7 +106,7 @@ defaults write com.cxs.tray CodexAppName "Your App Name"
 - The menu refreshes every 5 minutes.
 - The status item title shows the current default account name and 5-hour remaining value.
 - If Codex is not running when an account is selected, the app still syncs auth and launches Codex.
-- When syncing accounts, the app asks running apps named `Codex` or whose bundle identifier contains `codex` to quit before relaunching Codex.
+- When syncing accounts, the app asks running apps named `Codex` or whose bundle identifier contains `codex` to quit, verifies they are gone, and aborts the sync if Codex is still running after the timeout.
 
 ## Privacy and Security
 

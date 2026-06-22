@@ -213,18 +213,45 @@ final class CodexAppController: @unchecked Sendable {
         self.appName = appName
     }
 
-    func quitGracefully(timeout: TimeInterval = 8) {
-        let runningApps = NSWorkspace.shared.runningApplications.filter {
-            $0.localizedName == appName || $0.bundleIdentifier?.localizedCaseInsensitiveContains("codex") == true
-        }
+    func quitGracefully(timeout: TimeInterval = 8) throws {
+        let runningApps = matchingRunningApps()
 
         guard !runningApps.isEmpty else { return }
 
-        runningApps.forEach { $0.terminate() }
+        runningApps.forEach { _ = $0.terminate() }
         let deadline = Date().addingTimeInterval(timeout)
-        while runningApps.contains(where: { !$0.isTerminated }) && Date() < deadline {
+
+        while Date() < deadline {
+            if matchingRunningApps().isEmpty {
+                return
+            }
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
         }
+
+        let stillRunning = matchingRunningApps()
+        guard stillRunning.isEmpty else {
+            throw NSError(
+                domain: "CXSTray.CodexAppController",
+                code: 1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "\(appName) did not quit within \(Int(timeout))s; account switch aborted. Still running: \(appListDescription(stillRunning))"
+                ]
+            )
+        }
+    }
+
+    private func matchingRunningApps() -> [NSRunningApplication] {
+        NSWorkspace.shared.runningApplications.filter {
+            $0.localizedName == appName || $0.bundleIdentifier?.localizedCaseInsensitiveContains("codex") == true
+        }
+    }
+
+    private func appListDescription(_ apps: [NSRunningApplication]) -> String {
+        apps.map { app in
+            app.localizedName
+                ?? app.bundleIdentifier
+                ?? "pid \(app.processIdentifier)"
+        }.joined(separator: ", ")
     }
 
     func relaunch() {
@@ -261,7 +288,7 @@ enum CLI {
 
         do {
             print("Quitting \(appName)...")
-            codex.quitGracefully()
+            try codex.quitGracefully()
             print("Syncing \(account)...")
             try service.sync(account: account)
             if try service.ensureOCXIfAvailable() {
@@ -358,7 +385,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Result {
                 let codex = CodexAppController(appName: appName)
-                codex.quitGracefully()
+                try codex.quitGracefully()
                 try service.sync(account: accountName)
                 _ = try service.ensureOCXIfAvailable()
                 codex.relaunch()

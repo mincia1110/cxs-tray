@@ -254,12 +254,31 @@ final class CodexAppController: @unchecked Sendable {
         }.joined(separator: ", ")
     }
 
-    func relaunch() {
+    func relaunch(timeout: TimeInterval = 8) throws {
         do {
-            _ = try CommandRunner.run(["open", "-a", appName], timeout: 10)
+            let result = try CommandRunner.run(["open", "-a", appName], timeout: 10)
+            if result.status != 0 {
+                NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/Applications/\(appName).app"), configuration: NSWorkspace.OpenConfiguration())
+            }
         } catch {
             NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/Applications/\(appName).app"), configuration: NSWorkspace.OpenConfiguration())
         }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !matchingRunningApps().isEmpty {
+                return
+            }
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+        }
+
+        throw NSError(
+            domain: "CXSTray.CodexAppController",
+            code: 2,
+            userInfo: [
+                NSLocalizedDescriptionKey: "\(appName) did not launch within \(Int(timeout))s; ocx ensure skipped."
+            ]
+        )
     }
 }
 
@@ -291,11 +310,11 @@ enum CLI {
             try codex.quitGracefully()
             print("Syncing \(account)...")
             try service.sync(account: account)
+            print("Launching \(appName)...")
+            try codex.relaunch()
             if try service.ensureOCXIfAvailable() {
                 print("Ensured ocx")
             }
-            print("Launching \(appName)...")
-            codex.relaunch()
             print("Synced \(account)")
             return 0
         } catch {
@@ -308,7 +327,7 @@ enum CLI {
         handle.write("""
         Usage:
           CXSTray                 Run the menu bar app
-          CXSTray switch <account> Quit Codex, run cxs sync <account>, run ocx ensure if available, relaunch Codex
+          CXSTray switch <account> Quit Codex, run cxs sync <account>, relaunch Codex, run ocx ensure if available
 
         Environment:
           CXS_TRAY_CODEX_APP_NAME Override the Codex app name to relaunch
@@ -387,8 +406,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let codex = CodexAppController(appName: appName)
                 try codex.quitGracefully()
                 try service.sync(account: accountName)
+                try codex.relaunch()
                 _ = try service.ensureOCXIfAvailable()
-                codex.relaunch()
                 return try service.loadAccounts()
             }
 

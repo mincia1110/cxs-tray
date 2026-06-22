@@ -10,8 +10,8 @@ It shows the values from `cxs usage` in the menu bar menu. Selecting an account:
 1. gracefully asks the running Codex app to quit,
 2. verifies Codex is no longer running,
 3. runs `cxs sync <account>`,
-4. runs `ocx ensure` if `ocx` is available,
-5. launches Codex again with `open -a Codex`,
+4. launches Codex again with `open -a Codex`,
+5. runs `ocx ensure` if `ocx` is available,
 6. refreshes usage/default-account state.
 
 ## Requirements
@@ -36,9 +36,9 @@ swift run CXSTray -- switch <account>
 ```
 
 This quits the configured Codex app, verifies it is no longer running, runs
-`cxs sync <account>`, runs `ocx ensure` when `ocx` is available, and relaunches
-Codex. It is useful over SSH when you want to switch the active account before
-using Codex remote.
+`cxs sync <account>`, relaunches Codex, and runs `ocx ensure` when `ocx` is
+available. It is useful over SSH when you want to switch the active account
+before using Codex remote.
 
 If you installed the app bundle, you can call the installed executable directly:
 

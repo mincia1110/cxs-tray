@@ -240,6 +240,35 @@ final class CodexAppController: @unchecked Sendable {
         }
     }
 
+    func stopStandaloneAppServers(timeout: TimeInterval = 5) throws {
+        let pids = try standaloneAppServerPIDs()
+        guard !pids.isEmpty else { return }
+
+        let killResult = try CommandRunner.run(["kill"] + pids.map(String.init), timeout: 5)
+        if killResult.status != 0, !(try standaloneAppServerPIDs()).isEmpty {
+            throw commandError("kill standalone codex app-server", killResult)
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if try standaloneAppServerPIDs().isEmpty {
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+
+        let remaining = try standaloneAppServerPIDs()
+        guard remaining.isEmpty else {
+            throw NSError(
+                domain: "CXSTray.CodexAppController",
+                code: 3,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "standalone codex app-server did not stop within \(Int(timeout))s; account switch aborted. PIDs: \(remaining.map(String.init).joined(separator: ", "))"
+                ]
+            )
+        }
+    }
+
     private func matchingRunningApps() -> [NSRunningApplication] {
         NSWorkspace.shared.runningApplications.filter {
             $0.localizedName == appName || $0.bundleIdentifier?.localizedCaseInsensitiveContains("codex") == true
@@ -252,6 +281,31 @@ final class CodexAppController: @unchecked Sendable {
                 ?? app.bundleIdentifier
                 ?? "pid \(app.processIdentifier)"
         }.joined(separator: ", ")
+    }
+
+    private func standaloneAppServerPIDs() throws -> [Int32] {
+        let result = try CommandRunner.run(["pgrep", "-f", "(^|/)codex app-server --listen unix://"], timeout: 5)
+        if result.status == 1 {
+            return []
+        }
+        guard result.status == 0 else {
+            throw commandError("pgrep standalone codex app-server", result)
+        }
+
+        return result.output
+            .split(whereSeparator: \.isNewline)
+            .compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
+    private func commandError(_ command: String, _ result: CommandResult) -> NSError {
+        let detail = [result.error, result.output]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty }) ?? "exit \(result.status)"
+        return NSError(
+            domain: "CXSTray.CodexAppController",
+            code: Int(result.status),
+            userInfo: [NSLocalizedDescriptionKey: "\(command) failed: \(detail)"]
+        )
     }
 
     func relaunch(timeout: TimeInterval = 8) throws {
@@ -308,6 +362,7 @@ enum CLI {
         do {
             print("Quitting \(appName)...")
             try codex.quitGracefully()
+            try codex.stopStandaloneAppServers()
             print("Syncing \(account)...")
             try service.sync(account: account)
             print("Launching \(appName)...")
@@ -327,7 +382,7 @@ enum CLI {
         handle.write("""
         Usage:
           CXSTray                 Run the menu bar app
-          CXSTray switch <account> Quit Codex, run cxs sync <account>, relaunch Codex, run ocx ensure if available
+          CXSTray switch <account> Quit Codex, stop stale app-server, run cxs sync <account>, relaunch Codex, run ocx ensure if available
 
         Environment:
           CXS_TRAY_CODEX_APP_NAME Override the Codex app name to relaunch
@@ -405,6 +460,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let result = Result {
                 let codex = CodexAppController(appName: appName)
                 try codex.quitGracefully()
+                try codex.stopStandaloneAppServers()
                 try service.sync(account: accountName)
                 try codex.relaunch()
                 _ = try service.ensureOCXIfAvailable()

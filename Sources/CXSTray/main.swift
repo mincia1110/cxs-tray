@@ -483,8 +483,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             empty.isEnabled = false
             menu.addItem(empty)
         } else {
+            let widths = menuColumnWidths(for: accounts)
             accounts.forEach { account in
-                let title = menuTitle(for: account)
+                let title = menuTitle(for: account, widths: widths)
                 let item = NSMenuItem(title: title, action: #selector(selectAccount(_:)), keyEquivalent: "")
                 item.attributedTitle = menuAttributedTitle(title)
                 item.target = self
@@ -520,13 +521,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return "CXS"
     }
 
-    private func menuTitle(for account: AccountUsage) -> String {
+    private func menuColumnWidths(for accounts: [AccountUsage]) -> (account: Int, plan: Int, fiveHourLeft: Int, fiveHourReset: Int, weekLeft: Int, weekReset: Int) {
+        (
+            account: accounts.map(\.account.count).max() ?? 0,
+            plan: accounts.map(\.plan.count).max() ?? 0,
+            fiveHourLeft: accounts.map(\.fiveHourLeft.count).max() ?? 0,
+            fiveHourReset: accounts.map(\.fiveHourReset.count).max() ?? 0,
+            weekLeft: accounts.map(\.weekLeft.count).max() ?? 0,
+            weekReset: accounts.map(\.weekReset.count).max() ?? 0
+        )
+    }
+
+    private func pad(_ value: String, to width: Int) -> String {
+        value.padding(toLength: width, withPad: " ", startingAt: 0)
+    }
+
+    private func menuTitle(for account: AccountUsage, widths: (account: Int, plan: Int, fiveHourLeft: Int, fiveHourReset: Int, weekLeft: Int, weekReset: Int)) -> String {
         let defaultMarker = account.isDefault ? "current" : "sync"
         return [
-            account.account,
-            account.plan,
-            "5h \(account.fiveHourLeft) reset \(account.fiveHourReset)",
-            "week \(account.weekLeft) reset \(account.weekReset)",
+            pad(account.account, to: widths.account),
+            pad(account.plan, to: widths.plan),
+            "5h \(pad(account.fiveHourLeft, to: widths.fiveHourLeft)) reset \(pad(account.fiveHourReset, to: widths.fiveHourReset))",
+            "week \(pad(account.weekLeft, to: widths.weekLeft)) reset \(pad(account.weekReset, to: widths.weekReset))",
             defaultMarker
         ].joined(separator: "  ")
     }

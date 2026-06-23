@@ -4,13 +4,11 @@ import Foundation
 
 struct AccountUsage {
     let account: String
-    let email: String
     let plan: String
     let fiveHourLeft: String
     let weekLeft: String
     let fiveHourReset: String
     let weekReset: String
-    let source: String
     var isDefault: Bool = false
 }
 
@@ -71,9 +69,7 @@ enum CXSParser {
             return []
         }
 
-        let modernColumns = ["Account", "Email", "Plan", "5h left", "Week left", "5h reset", "Week reset", "Source"]
-        let legacyColumns = ["Account", "Email", "Plan", "5h left", "Week left", "Reset", "Source"]
-        let columns = modernColumns.allSatisfy { header.contains($0) } ? modernColumns : legacyColumns
+        let columns = ["Account", "Email", "Plan", "5h left", "Week left", "5h reset", "Week reset", "Source"]
         let starts = columns.compactMap { column -> (String, String.Index)? in
             guard let range = header.range(of: column) else { return nil }
             return (column, range.lowerBound)
@@ -92,29 +88,14 @@ enum CXSParser {
 
             guard values.count == columns.count, !values[0].isEmpty else { return nil }
 
-            if columns == modernColumns {
-                return AccountUsage(
-                    account: values[0],
-                    email: values[1],
-                    plan: values[2],
-                    fiveHourLeft: values[3],
-                    weekLeft: values[4],
-                    fiveHourReset: values[5],
-                    weekReset: values[6],
-                    source: values[7]
-                )
-            } else {
-                return AccountUsage(
-                    account: values[0],
-                    email: values[1],
-                    plan: values[2],
-                    fiveHourLeft: values[3],
-                    weekLeft: values[4],
-                    fiveHourReset: values[5],
-                    weekReset: values[5],
-                    source: values[6]
-                )
-            }
+            return AccountUsage(
+                account: values[0],
+                plan: values[2],
+                fiveHourLeft: values[3],
+                weekLeft: values[4],
+                fiveHourReset: values[5],
+                weekReset: values[6]
+            )
         }
     }
 
@@ -156,7 +137,7 @@ final class CXSService: @unchecked Sendable {
 
         let usage = try CommandRunner.run(["cxs", "usage"], timeout: 45)
         guard usage.status == 0 else {
-            throw commandError("cxs usage", usage)
+            throw commandError(domain: "CXSTray.CXSService", "cxs usage", usage)
         }
 
         let list = try CommandRunner.run(["cxs", "list"], timeout: 10)
@@ -172,14 +153,14 @@ final class CXSService: @unchecked Sendable {
     func sync(account: String) throws {
         let result = try CommandRunner.run(["cxs", "sync", account], timeout: 90)
         guard result.status == 0 else {
-            throw commandError("cxs sync \(account)", result)
+            throw commandError(domain: "CXSTray.CXSService", "cxs sync \(account)", result)
         }
     }
 
     func repairSessions() throws {
         let result = try CommandRunner.run(["cxs", "repair-sessions"], timeout: 90)
         guard result.status == 0 else {
-            throw commandError("cxs repair-sessions", result)
+            throw commandError(domain: "CXSTray.CXSService", "cxs repair-sessions", result)
         }
     }
 
@@ -189,20 +170,9 @@ final class CXSService: @unchecked Sendable {
 
         let result = try CommandRunner.run(["ocx", "ensure"], timeout: 30)
         guard result.status == 0 else {
-            throw commandError("ocx ensure", result)
+            throw commandError(domain: "CXSTray.CXSService", "ocx ensure", result)
         }
         return true
-    }
-
-    private func commandError(_ command: String, _ result: CommandResult) -> NSError {
-        let detail = [result.error, result.output]
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: { !$0.isEmpty }) ?? "exit \(result.status)"
-        return NSError(
-            domain: "CXSTray.CXSService",
-            code: Int(result.status),
-            userInfo: [NSLocalizedDescriptionKey: "\(command) failed: \(detail)"]
-        )
     }
 }
 
@@ -213,6 +183,26 @@ enum AppSettings {
             ?? UserDefaults.standard.string(forKey: "CodexAppName")
             ?? "Codex"
     }
+}
+
+func commandError(domain: String, _ command: String, _ result: CommandResult) -> NSError {
+    let detail = [result.error, result.output]
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first(where: { !$0.isEmpty }) ?? "exit \(result.status)"
+    return NSError(
+        domain: domain,
+        code: Int(result.status),
+        userInfo: [NSLocalizedDescriptionKey: "\(command) failed: \(detail)"]
+    )
+}
+
+func switchCodexAccount(_ account: String, appName: String, service: CXSService) throws {
+    let codex = CodexAppController(appName: appName)
+    try codex.quitGracefully()
+    try codex.stopStandaloneAppServers()
+    try service.sync(account: account)
+    try codex.relaunch()
+    _ = try service.ensureOCXIfAvailable()
 }
 
 final class CodexAppController: @unchecked Sendable {
@@ -255,7 +245,7 @@ final class CodexAppController: @unchecked Sendable {
 
         let killResult = try CommandRunner.run(["kill"] + pids.map(String.init), timeout: 5)
         if killResult.status != 0, !(try standaloneAppServerPIDs()).isEmpty {
-            throw commandError("kill standalone codex app-server", killResult)
+            throw commandError(domain: "CXSTray.CodexAppController", "kill standalone codex app-server", killResult)
         }
 
         let deadline = Date().addingTimeInterval(timeout)
@@ -298,23 +288,12 @@ final class CodexAppController: @unchecked Sendable {
             return []
         }
         guard result.status == 0 else {
-            throw commandError("pgrep standalone codex app-server", result)
+            throw commandError(domain: "CXSTray.CodexAppController", "pgrep standalone codex app-server", result)
         }
 
         return result.output
             .split(whereSeparator: \.isNewline)
             .compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-    }
-
-    private func commandError(_ command: String, _ result: CommandResult) -> NSError {
-        let detail = [result.error, result.output]
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: { !$0.isEmpty }) ?? "exit \(result.status)"
-        return NSError(
-            domain: "CXSTray.CodexAppController",
-            code: Int(result.status),
-            userInfo: [NSLocalizedDescriptionKey: "\(command) failed: \(detail)"]
-        )
     }
 
     func relaunch(timeout: TimeInterval = 8) throws {
@@ -365,20 +344,10 @@ enum CLI {
 
     private static func switchAccount(_ account: String) -> Int32 {
         let appName = AppSettings.codexAppName
-        let codex = CodexAppController(appName: appName)
         let service = CXSService()
 
         do {
-            print("Quitting \(appName)...")
-            try codex.quitGracefully()
-            try codex.stopStandaloneAppServers()
-            print("Syncing \(account)...")
-            try service.sync(account: account)
-            print("Launching \(appName)...")
-            try codex.relaunch()
-            if try service.ensureOCXIfAvailable() {
-                print("Ensured ocx")
-            }
+            try switchCodexAccount(account, appName: appName, service: service)
             print("Synced \(account)")
             return 0
         } catch {
@@ -514,9 +483,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             empty.isEnabled = false
             menu.addItem(empty)
         } else {
-            let columnWidths = menuColumnWidths(for: accounts)
             accounts.forEach { account in
-                let title = menuTitle(for: account, widths: columnWidths)
+                let title = menuTitle(for: account)
                 let item = NSMenuItem(title: title, action: #selector(selectAccount(_:)), keyEquivalent: "")
                 item.attributedTitle = menuAttributedTitle(title)
                 item.target = self
@@ -552,41 +520,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return "CXS"
     }
 
-    private struct MenuColumnWidths {
-        let account: Int
-        let plan: Int
-        let fiveHourLeft: Int
-        let fiveHourReset: Int
-        let weekLeft: Int
-        let weekReset: Int
-    }
-
-    private func menuColumnWidths(for accounts: [AccountUsage]) -> MenuColumnWidths {
-        MenuColumnWidths(
-            account: maxWidth(accounts.map(\.account)),
-            plan: maxWidth(accounts.map(\.plan)),
-            fiveHourLeft: maxWidth(accounts.map(\.fiveHourLeft)),
-            fiveHourReset: maxWidth(accounts.map(\.fiveHourReset)),
-            weekLeft: maxWidth(accounts.map(\.weekLeft)),
-            weekReset: maxWidth(accounts.map(\.weekReset))
-        )
-    }
-
-    private func maxWidth(_ values: [String]) -> Int {
-        values.map(\.count).max() ?? 0
-    }
-
-    private func pad(_ value: String, to width: Int) -> String {
-        value.padding(toLength: width, withPad: " ", startingAt: 0)
-    }
-
-    private func menuTitle(for account: AccountUsage, widths: MenuColumnWidths) -> String {
+    private func menuTitle(for account: AccountUsage) -> String {
         let defaultMarker = account.isDefault ? "current" : "sync"
         return [
-            pad(account.account, to: widths.account),
-            pad(account.plan, to: widths.plan),
-            "5h \(pad(account.fiveHourLeft, to: widths.fiveHourLeft)) reset \(pad(account.fiveHourReset, to: widths.fiveHourReset))",
-            "week \(pad(account.weekLeft, to: widths.weekLeft)) reset \(pad(account.weekReset, to: widths.weekReset))",
+            account.account,
+            account.plan,
+            "5h \(account.fiveHourLeft) reset \(account.fiveHourReset)",
+            "week \(account.weekLeft) reset \(account.weekReset)",
             defaultMarker
         ].joined(separator: "  ")
     }
@@ -611,11 +551,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sync(account)
     }
 
-    @objc private func refreshAction(_ sender: NSMenuItem) {
+    @objc private func refreshAction(_: NSMenuItem) {
         refresh()
     }
 
-    @objc private func quit(_ sender: NSMenuItem) {
+    @objc private func quit(_: NSMenuItem) {
         NSApp.terminate(nil)
     }
 }
